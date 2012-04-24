@@ -12,7 +12,7 @@
       [(cons t₀ t₁) (list make-term:cons t₀ t₁)]))
   (match t
     ['hole *t:hole]
-    [(or (? symbol? t) (? number? t) (? null? t) (? hash? t)) 
+    [(or (? symbol? t) (? number? t) (? null? t) (? hash? t))
      (term:atom t)]
     [(app classify (list k t₀ t₁))
      (define ta₀ (tℓ (gensym)))
@@ -40,7 +40,7 @@
 
 (define (ρ-lookup ρ×x)
   (match ρ×x
-    [(term:cons (term:atom ρ) (term:atom x)) 
+    [(term:cons (term:atom ρ) (term:atom x))
      (hash-ref ρ x (λ () (raise 'oops)))]))
 
 (define (ρ-add ρ×x×v)
@@ -74,7 +74,7 @@
                 (r:in-hole (r:var 'E) (r:cons (r:var 'e)
                                               (r:app ρ-add (r:cons (r:var 'ρ) (r:cons (r:var 'x) (r:var 'v)))))))))
 (define id-id
-  (cons (cons '(λ (x) . x) 
+  (cons (cons '(λ (x) . x)
               '(λ (y) . y))
         ;; starting ρ
         ⊥eq))

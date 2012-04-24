@@ -61,14 +61,6 @@
     [_ #f]))
 (define (stuck-state? s) #f)
 
-;; non-recursive helper used to get (k tl tr) from the paper.
-(define (classify-constructor t)
-  (match-term t
-    [(left tl tr) (list 'left tl tr)]
-    [(right tl tr) (list 'right tl tr)]
-    [(cons tl tr) (list 'cons tl tr)]
-    [_ '()]))
-
 ;; get ALL next steps to flatten out nondeterminism.
 ;; step-match-eval : Meval → (setof State)
 (define (step-match-eval s)
@@ -85,8 +77,10 @@
     [((pattern:datum f) (term:atom a)) ;; cheap way to get symbol?, number? etc.
      (cond [(f a) (set (mk-done (make-m *d:· ⊥eq)))]
            [else ∅])]
-    [((pattern:cons pl pr) (app classify-constructor (list k tl tr)))
-     (set (mk-step pl tl (make-M:right pr tl tr k M)))]
+    [((pattern:cons pl pr) (or (term:cons tl tr)
+                               (term:left tl tr)
+                               (term:right tl tr)))
+     (set (mk-step pl tl (make-M:right pr tl tr M)))]
     [((pattern:in-hole pc ph) t)
      (set (mk-step pc t (make-M:hole ph M)))]
     [((pattern:name x p) t)
@@ -121,9 +115,9 @@
        [(·) (printf "WOOO MATCH! ~a~%~%" b)
         (set (make-state:Ieval r b (make-I:mt)))] ;; found a full match
        [(context _ _) ∅])] ;; incomplete match. Toss.
-    [(right pr tl tr k M)
-     (set (mk-step pr tr (make-M:select tl tr k db M)))]
-    [(select tl tr k (m dl bl) M) ;; b = br from paper
+    [(right pr tl tr M)
+     (set (mk-step pr tr (make-M:select tl tr db M)))]
+    [(select tl tr (m dl bl) M) ;; b = br from paper
      ;; ⊔ partial! Make sure we don't allow bad bindings.
      (define b′ (⊔ bl b))
      (cond [b′ (for/set ([d (do-select tl dl tr d)])
@@ -187,7 +181,7 @@
                 (make-state:Meval p t (M:mt r)))]
     [(plug-right r I) (set (make-state:Ieval r b (make-I:do-plug t I)))]
     [(join-right r I) (set (make-state:Ieval r b (make-I:do-join t I)))]
-    [(do-plug tc I) 
+    [(do-plug tc I)
      (define C (term->context-or-f tc))
      (cond [C (set (make-state:Peval C t (make-P:mt b I)))]
            [else ∅])] ;; XXX: raise error
@@ -260,11 +254,11 @@
   (let loop ()
     (define final (apply-reduction-relation ΔW W))
     ;; loop if there is a step we haven't taken yet.
-    (cond [(for/or ([(ς _) (in-hash final)] 
+    (cond [(for/or ([(ς _) (in-hash final)]
                     #:unless (hash-has-key? steps ς))
              (hash-set! steps ς #t)
              (for ([ς′ (step-inst-apply ς)])
                (hash-set! ΔW ς′ #t)
-               (hash-set! W ς′ #t))) 
+               (hash-set! W ς′ #t)))
            (loop)]
           [else steps])))
