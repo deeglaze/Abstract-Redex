@@ -5,7 +5,7 @@
 
 (define nonterminal? symbol?)
 (define variable? symbol?)
-(define atom/c (or/c symbol? number? null?))
+(define atom/c any/c)
 (define ∅ (set))
 (define ⊥eq #hasheq())
 (define ∪ set-union)
@@ -21,8 +21,6 @@
   [nt ([n nonterminal?])]
   [cons ([p₀ pattern] [p₁ pattern])]
   [in-hole ([pc pattern] [ph pattern])]
-#;[finite-map ([pdom pattern]
-               [pcodom pattern])]
   [atom ([a atom/c])]
   [datum ([f (-> any/c boolean?)])])
 (define *p:hole (pattern:hole))
@@ -34,7 +32,6 @@
   [left  ([C term] [t term])]
   [right ([C term] [t term])]
   [cons  ([C term] [t term])]
-#;[finite-map ([f (hash/c term term)])]
   [atom ([a atom/c])])
 (define *t:hole (term:hole))
 ;; bindings : Var ↦ Term
@@ -61,6 +58,7 @@
   [map-add ([rmap r] [rkey r] [rval r])]
   [map-lookup ([rmap r] [rkey r])]
   [cons ([car r] [cdr r])])
+
 ;; a semantics is a set of rewrite rules.
 ;; a rewrite rule applies to a term if a pattern in the matches it,
 ;; and that pattern's corresponding rewrite is defined on the match's result.
@@ -69,7 +67,6 @@
 ;; a match result can have further decomposition (intermediate) or a complete term,
 ;; along with the bound names of matched subterms.
 (define-struct/contract m #;atch-result ([d d/c] [b b/c]) #:transparent)
-(define term-constructor/c (or/c 'cons 'left 'right)) ;; following the APLOS paper
 
 (define-ADT M;atch context
   ;; when done, apply this rewrite rule (starts instantiation)
@@ -78,12 +75,10 @@
   [right ([pr pattern/c]
           [tl term/c]
           [tr term/c]
-          [k term-constructor/c]
           [M M])]
   ;; delayed selection of match results since matching right of cons.
   [select ([tl term/c]
            [tr term/c]
-           [k term-constructor/c]
            [leftdb m?]
            [M M])]
   ;; delayed matching of hole since matching context.
@@ -92,8 +87,6 @@
   [combine ([C context/c] [b b/c] [M M])]
   ;; delayed binding name for pattern since matching pattern.
   [name ([x variable?] [t term/c] [M M])]
-  ;; delayed matching a finite function
-#;  [codomain]
   ;; delay throwing away intermediate bindings since recursively parsing.
   [nt ([M M])])
 
@@ -117,21 +110,6 @@
                [I I])]
   [do-join ([tl term/c]
             [I I])]
-#|
-  [add-key/value ([rkey r/c]
-                  [rval r/c]
-                  [I I])]
-  [add-value ([tmap term/c]
-              [rval r/c]
-              [I I])]
-  [add ([tmap term/c]
-        [tkey term/c]
-        [I I])]
-  [lookup-key ([rkey r/c]
-               [I I])]
-  [lookup ([tmap term/c]
-           [I I])]
-|#
   [meta-app ([f (-> term/c term/c)]
              [I I])])
 
