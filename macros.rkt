@@ -26,19 +26,20 @@
      (define variant? (map (λ (id) (format-id stx "~a?" id)) variant-structs))
      (with-syntax ([(variant-structs ...) variant-structs]
                    [(variant? ...) variant?])
-       #'(begin (define adt.contract (recursive-contract (or/c variant? ...) #:chaperone))
+       (syntax/loc stx
+         (begin (define adt.contract (recursive-contract (or/c variant? ...) #:chaperone))
                 (define-syntax-parameter adt.name (λ (stx) (raise-syntax-error #f "To be used only in define-ADT" stx)))
                 (splicing-syntax-parameterize ([adt.name (λ _ #'(recursive-contract adt.contract #:chaperone))])
                   (define-struct/contract variant-structs ([field field/c] ...) #:transparent) ...)
                 ;; for quick recognition
                 (define (adt.shallow x) (or (variant? x) ...))
                 (define-syntax (adt.matcher stx2)
-                  (define-syntax-class a-variant 
+                  (define-syntax-class a-variant
                     #:description "Name of an ADT variant"
                     #:attributes (struct-name)
-                    (pattern name:id 
-                             #:attr struct-name 
-                                    (cond [(free-identifier=? (attribute name) #'variant) 
+                    (pattern name:id
+                             #:attr struct-name
+                                    (cond [(free-identifier=? (attribute name) #'variant)
                                            #'variant-structs] ...
                                            [else #f])
                              #:when (attribute struct-name)))
@@ -53,4 +54,4 @@
                    (...
                     (syntax-parse stx2
                       [(_ e:expr cls:match-clauses)
-                       #`(match/derived e #,stx2 cls.pats ...)])))))]))
+                       #`(match/derived e #,stx2 cls.pats ...)]))))))]))
