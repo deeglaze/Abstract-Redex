@@ -169,7 +169,8 @@
            [else ∅])] ;; XXX: raise error?
     [(in-hole rc rh) (set (mk-step rc (make-I:plug-right rh I)))]
     [(cons rl rr) (set (mk-step rl (make-I:join-right rr I)))]
-    [(app f r) (set (mk-step r (make-I:meta-app f I)))]))
+    [(app f '()) (set (make-state:Iapply (f) b I))] ;; same TODO as below.
+    [(app f (cons r rs)) (set (mk-step r (make-I:meta-app f rs '() I)))]))
 
 (define (step-inst-apply s)
   (match-define (state:Iapply t b I) s)
@@ -193,7 +194,10 @@
            [else (set (make-state:Iapply (make-term:cons tl t) b I))])]
     ;; TODO: break into several steps if we know the metafunction
     ;; is just another reduction relation (but a functional one)
-    [(meta-app f I) (set (make-state:Iapply (f t) b I))]))
+    [(meta-app f '() tdone I) 
+     (set (make-state:Iapply (apply f (reverse (cons t tdone))) b I))]
+    [(meta-app f (cons r rs) tdone I)
+     (set (make-state:Ieval r b (make-I:meta-app f rs (cons t tdone) I)))]))
 
 (define (step-plug-eval s)
   (match-define (state:Peval C t P) s)
