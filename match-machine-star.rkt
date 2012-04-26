@@ -2,7 +2,7 @@
 
 (require "macros.rkt"
          "match-machine-star-data.rkt"
-         racket/trace)
+         "env-to-recursive.rkt")
 (provide with-language-semantics inject
          apply-reduction-relation apply-reduction-relation*)
 
@@ -11,40 +11,25 @@
 (define (⊔ b₀ b₁)
   (let/ec bad
     (for*/fold ([res b₀]) ([(x t) (in-hash b₁)])
-      (cond [(andit (hash-ref b₀ x #f) (not (equal? t it))) (bad #f)]
+      (cond [(andit (hash-ref b₀ x #f)
+                    (not (equal? t it))) ;; TODO: fix equality.
+             (bad #f)]
             [else (hash-set res x t)]))))
 
 ;; Address -> (setof Storable)
 (define (resolve-term/context tc)
   (match tc
-    [(or (? tℓ?) (? cℓ?)) (σ-lookup tc)]
+    [(or (? termℓ?) (? contextℓ?)) (σ-lookup tc)]
     [_ (set tc)]))
-(trace resolve-term/context)
-
-;; given a base address for a compound term/context, produce the
-;; one-step flattened version
-(define ((simpler basea flat?) addrk t)
-  (cond [(flat? t) t]
-        [else (define ta (addrk basea))
-              (σ-bind ta t)
-              ta]))
-(define (alloc-term baseℓ k l r)
-  (define s (simpler (tℓ-addr baseℓ) term-flat/c))
-  (k (s tℓ-left l) (s tℓ-right r)))
-(define (alloc-context-left baseℓ l r)
-  (context:left ((simpler (cℓ-addr baseℓ) context-flat/c) cℓ-left l) r))
-(define (alloc-context-right baseℓ l r)
-  (context:right l ((simpler (cℓ-addr baseℓ) context-flat/c) cℓ-right r)))
 
 (define (context-flat->term-flat C)
   (match C
     [(context:hole) *t:hole]
     [(cℓ a)
-     (define ta (tℓ a))
      (define ts (for/set ([Ca (in-set (σ-lookup C))])
                   (context->term Ca)))
-     (σ-bind ta ts)
-     ta]))
+     (σ-flat-bind (tℓ a) ts)]
+    [err (error 'context-flat->term-flat "bad match ~a" err)]))
 
 (define (context->term C)
   (match C
@@ -63,9 +48,7 @@
                            #:unless (false? Ca))
                   Ca))
      (cond [(set-empty? Cs) #f]
-           [else (define Ca (cℓ a))
-                 (σ-bind Ca Cs)
-                 Ca])]
+           [else (σ-flat-bind (cℓ a) Cs)])]
     [_ #f]))
 
 ;; Term -> (Context + #f)
@@ -133,7 +116,8 @@
     (match* (p t)
       [((pattern:hole) t)
        (∪ (set-add ςs (mk-done (make-m (d:context *c:hole t) ⊥eq)))
-          (cond [(term:hole? t) (set (mk-done base-m))]
+          (cond [(set-member? (resolve-term/context t) *t:hole)
+                 (set (mk-done base-m))]
                 [else ∅]))]
       [((pattern:atom a) (term:atom a))
        (set-add ςs (mk-done (make-m *d:· ⊥eq)))]
@@ -143,14 +127,11 @@
       [((pattern:cons pl pr) (or (term:cons tl tr)
                                  (term:left tl tr)
                                  (term:right tl tr)))
-       (σ-bind Mb (make-M:right pr tl tr Ma))
-       (set-add ςs (mk-step pl tl Mb))]
+       (set-add ςs (mk-step pl tl (σ-bind Mb (make-M:right pr tl tr Ma))))]
       [((pattern:in-hole pc ph) t)
-       (σ-bind Mb (make-M:hole ph Ma))
-       (set-add ςs (mk-step pc t Mb))]
+       (set-add ςs (mk-step pc t (σ-bind Mb (make-M:hole ph Ma))))]
       [((pattern:name x p) t)
-       (σ-bind Mb (make-M:name x t Ma))
-       (set-add ςs (mk-step p t Mb))]
+       (set-add ςs (mk-step p t (σ-bind Mb (make-M:name x t Ma))))]
       [((pattern:nt n) t)
        (σ-bind Mb (make-M:nt Ma))
        (for/fold ([ςs ςs]) ([p (follow-nt n)])
@@ -184,12 +165,10 @@
       [(M:mt r)
        (match-d d
          [(·) (printf "WOO MATCH! ~a~%~%" b)
-          (σ-bind addr *I:mt)
-          (set-add ςs (make-state:Ieval r b addr))] ;; found a full match
+          (set-add ςs (make-state:Ieval r b (σ-bind addr *I:mt)))] ;; found a full match
          [(context _ _) ςs])] ;; incomplete match. Toss.
       [(M:right pr tl tr Mb)
-       (σ-bind addr (make-M:select tl tr db Mb))
-       (set-add ςs (mk-step pr tr addr))]
+       (set-add ςs (mk-step pr tr (σ-bind addr (make-M:select tl tr db Mb))))]
       [(M:select tl tr (m dl bl) Mb) ;; b = br from paper
        ;; ⊔ partial! Make sure we don't allow bad bindings.
        (define b′ (⊔ bl b))
@@ -198,10 +177,9 @@
              [else ςs])]
       [(M:hole ph Mb)
        (match-d d
-                [(context C tc)
-                 (σ-bind addr (make-M:combine C b Mb))
-                 (set-add ςs (mk-step ph tc addr))]
-                [_ ςs])]
+         [(context C tc)
+          (set-add ςs (mk-step ph tc (σ-bind addr (make-M:combine C b Mb))))]
+         [_ ςs])]
       [(M:combine Cl bc Mb) ;; b = bh from paper
        (define b′ (⊔ bc b))
        (cond [b′ (match-d d
@@ -215,21 +193,20 @@
        (cond [b′ (set-add ςs (mk-done (make-m d b′) Mb))]
              [else ςs])]
       ;; drop db's bindings since they were "intermediate"
-      [(M:nt Mb) (set-add ςs (mk-done (make-m d ⊥eq) Mb))])))
+      [(M:nt Mb) (set-add ςs (mk-done (make-m d ⊥eq) Mb))]
+      [err (error 'step-match-apply "bad match ~a" err)])))
 
 (define (step-append-eval s)
   (match-define (state:Aeval Cl Cr t b Aa) s)
   (for/set ([Cl* (resolve-term/context Cl)])
     (define Ab ((alloc) s Cl*))
     (match Cl*
-      [(context:hole)
-       (set (make-state:Aapply Cr t b Aa))]
+      [(context:hole) (set (make-state:Aapply Cr t b Aa))]
       [(context:left Cf tf′)
-       (σ-bind Ab (make-A:left tf′ Aa))
-       (make-state:Aeval Cf Cr t b Ab)]
+       (make-state:Aeval Cf Cr t b (σ-bind Ab (make-A:left tf′ Aa)))]
       [(context:right tf′ Cf)
-       (σ-bind Ab (make-A:right tf′ Aa))
-       (make-state:Aeval Cf Cr t b Ab)])))
+       (make-state:Aeval Cf Cr t b (σ-bind Ab (make-A:right tf′ Aa)))]
+      [err (error 'step-append-eval "bad match ~a" err)])))
 
 (define (step-append-apply s)
   (match-define (state:Aapply C t b Aa) s)
@@ -242,7 +219,8 @@
        (make-state:Aapply addr t b Ab)]
       [(A:right t′ Ab)
        (σ-bind addr (alloc-context-right addr t′ C))
-       (make-state:Aapply addr t b Ab)])))
+       (make-state:Aapply addr t b Ab)]
+      [err (error 'step-append-apply "bad match ~a" err)])))
 
 (define (step-inst-eval s)
   (match-define (state:Ieval r b Ia) s)
@@ -256,15 +234,11 @@
      (define xterm (hash-ref b x #f))
      (cond [xterm (set (mk-done xterm))]
            [else ∅])] ;; XXX: raise error?
-    [(r:in-hole rc rh)
-     (σ-bind Ib (make-I:plug-right rh Ia))
-     (set (mk-step rc Ib))]
-    [(r:cons rl rr)
-     (σ-bind Ib (make-I:join-right rr Ia))
-     (set (mk-step rl Ib))]
-    [(r:app f r)
-     (σ-bind Ib (make-I:meta-app f Ia))
-     (set (mk-step r Ib))]))
+    [(r:in-hole rc rh) (set (mk-step rc (σ-bind Ib (make-I:plug-right rh Ia))))]
+    [(r:cons rl rr) (set (mk-step rl (σ-bind Ib (make-I:join-right rr Ia))))]
+    [(r:app f '()) (set (mk-done (f)))]
+    [(r:app f (cons r rs)) (set (mk-step r (σ-bind Ib (make-I:meta-app f rs '() Ia))))]
+    [err (error 'step-inst-eval "bad match ~a" err)]))
 
 (define (step-inst-apply s)
   (match-define (state:Iapply t b Ia) s)
@@ -272,25 +246,17 @@
     (match I
       ;; Outer evaluator will stop on these states.
       ;; We can call step to start another object language step.
-      [(I:mt) (for/fold ([ςs ςs]) ([rule (in-set (S))])
-                (match-define (rewrite p r) rule)
-                (define Ma ((alloc) s rule))
-                (σ-bind Ma (M:mt r))
-                (set-add ςs (make-state:Meval p t Ma)))]
+      [(I:mt)
+       (for/fold ([ςs ςs]) ([rule (in-set (S))])
+         (match-define (rewrite p r) rule)
+         (set-add ςs (make-state:Meval p t (σ-bind ((alloc) s rule) (M:mt r)))))]
       [(I:plug-right r Ib)
-       (define Ic ((alloc) s I))
-       (σ-bind Ic (make-I:do-plug t Ib))
-       (set-add ςs (make-state:Ieval r b Ic))]
+       (set-add ςs (make-state:Ieval r b (σ-bind ((alloc) s I) (make-I:do-plug t Ib))))]
       [(I:join-right r Ib)
-       (define Ic ((alloc) s I))
-       (σ-bind Ic (make-I:do-join t Ib))
-       (set-add ςs (make-state:Ieval r b Ic))]
+       (set-add ςs (make-state:Ieval r b (σ-bind ((alloc) s I) (make-I:do-join t Ib))))]
       [(I:do-plug tc Ib)
        (define C (term->context-or-f tc))
-       (cond [C
-              (define Pa ((alloc) s I))
-              (σ-bind Pa (make-P:mt b Ib))
-              (set-add ςs (make-state:Peval C t Pa))]
+       (cond [C (set-add ςs (make-state:Peval C t (σ-bind ((alloc) s I) (make-P:mt b Ib))))]
              [else ςs])] ;; XXX: raise error
       [(I:do-join tl Ib)
        (define cl-l (term-is-context-like? tl))
@@ -308,11 +274,16 @@
        (when (and (or (set-member? cl-r #f) (set-member? nc-l #f))
                   (or (set-member? cl-l #f) (set-member? nc-r #f)))
          (σ-bind addr (alloc-term addr make-term:cons tl t)))
-       (printf "Problematic? ~a: ~a (~a ~a ~a ~a)~%" addr (hash-ref (σ) addr #f) cl-l cl-r nc-l nc-r)
        (set-add ςs (make-state:Iapply addr b Ib))]
       ;; TODO: break into several steps if we know the metafunction
       ;; is just another reduction relation (but a functional one)
-      [(I:meta-app f I) (set-add ςs (make-state:Iapply (f t) b I))])))
+      [(I:meta-app f '() tdone I)
+       (set-add ςs (make-state:Iapply (apply f (reverse (cons t tdone))) b I))]
+      [(I:meta-app f (cons r rs) tdone Ib)
+       (define Ic ((alloc) s I))
+       (define I′ (make-I:meta-app f rs (cons t tdone) Ib))
+       (set-add ςs (make-state:Ieval r b (σ-bind Ic I′)))]
+      [err (error 'step-inst-apply "bad match ~a" err)])))
 
 (define (step-plug-eval s)
   (match-define (state:Peval C t Pa) s)
@@ -322,18 +293,15 @@
       [(context:hole) (make-state:Papply t Pa)]
       [(context:left Cl tr)
        (define cl-t (term-is-context-like? t))
-       (when (set-member? cl-t #t)
-         (σ-bind Pb (make-P:left-context tr Pa)))
-       (when (set-member? cl-t #f)
-         (σ-bind Pb (make-P:left-term tr Pa)))
+       (when (set-member? cl-t #t) (σ-bind Pb (make-P:left-context tr Pa)))
+       (when (set-member? cl-t #f) (σ-bind Pb (make-P:left-term tr Pa)))
        (make-state:Peval Cl t Pb)]
       [(context:right tl Cr)
        (define cl-t (term-is-context-like? t))
-       (when (set-member? cl-t #t)
-         (σ-bind Pb (make-P:right-context tl Pa)))
-       (when (set-member? cl-t #f)
-         (σ-bind Pb (make-P:right-term tl Pa)))
-       (make-state:Peval Cr t Pb)])))
+       (when (set-member? cl-t #t) (σ-bind Pb (make-P:right-context tl Pa)))
+       (when (set-member? cl-t #f) (σ-bind Pb (make-P:right-term tl Pa)))
+       (make-state:Peval Cr t Pb)]
+      [err (error 'step-plug-eval "bad match ~a" err)])))
 
 (define (step-plug-apply s)
   (match-define (state:Papply t Pa) s)
@@ -346,9 +314,11 @@
          [(P:left-context tr P)  (σ-bind ta (alloc-term ta make-term:left t tr))]
          [(P:left-term tr P)     (σ-bind ta (alloc-term ta make-term:cons t tr))]
          [(P:right-context tl P) (σ-bind ta (alloc-term ta make-term:right tl t))]
-         [(P:right-term tl P)    (σ-bind ta (alloc-term ta make-term:cons tl t))])
+         [(P:right-term tl P)    (σ-bind ta (alloc-term ta make-term:cons tl t))]
+         [err (error 'step-plug-apply "bad match ~a" err)])
        (make-state:Papply ta Pa)])))
 
+;; concrete allocation
 (define (base-alloc s [extra #f])
   (match s
     [(? state:Meval?) (Mℓ (gensym))]
@@ -356,6 +326,7 @@
      (match extra
        [(? M:mt?) (Iℓ (gensym))]
        [(? M:combine?) (Aℓ (gensym))]
+       [(? M:select?) (cℓ (gensym))]
        [_ (Mℓ (gensym))])]
     [(? state:Aeval?) (Aℓ (gensym))]
     [(? state:Aapply?) (cℓ (gensym))]
@@ -367,7 +338,8 @@
        [(? I:do-join?) (tℓ (gensym))]
        [_ (Iℓ (gensym))])]
     [(? state:Peval?) (Pℓ (gensym))]
-    [(? state:Papply?) (tℓ (gensym))]))
+    [(? state:Papply?) (tℓ (gensym))]
+    [err (error 'base-alloc "bad match ~a" err)]))
 
 ;; get all starting terms.
 (define (inject term)
@@ -383,6 +355,7 @@
 
 (define (apply-reduction-relation ΔW [W (make-hash)])
   (define Final (make-hash))
+  (define Stuck (make-hash))
 
   ;; Add ς to the work set (and the seen set)
   (define (todo ς)
@@ -394,25 +367,32 @@
     (define ς (for/first ([(k _) (in-hash ΔW)]) k))
     (cond [ς
            (cond [(final-state? ς) (hash-set! Final ς #t)]
-                 [else (for ([ς′ (in-set (step ς))])
-                         (todo ς′))])
+                 [else (define succ (step ς))
+                       (cond [(set-empty? succ)
+                              (hash-set! Stuck ς #t)]
+                             [else (for ([ς′ (in-set succ)])
+                                     (todo ς′))])])
            (hash-remove! ΔW ς)
            (loop)]
-          [else Final])))
+          [else (list Final Stuck)])))
 
 (define (apply-reduction-relation* term)
   (define ΔW (inject term))
   (define W (hash-copy ΔW))
   (define steps (make-hash))
+  (define all-stuck (make-hash))
 
   (let loop ()
-    (define final (apply-reduction-relation ΔW W))
+    (match-define (list final stuck) (apply-reduction-relation ΔW W))
+    (for ([(k _ ) (in-hash stuck)])
+      (hash-set! all-stuck k #t))
     ;; loop if there is a step we haven't taken yet.
     (cond [(for/or ([(ς _) (in-hash final)]
                     #:unless (hash-has-key? steps ς))
              (hash-set! steps ς #t)
              (for ([ς′ (step-inst-apply ς)])
+               (printf "Next step:~%") (pretty-print (translate-state ς′))
                (hash-set! ΔW ς′ #t)
                (hash-set! W ς′ #t)))
            (loop)]
-          [else (list (σ) steps)])))
+          [else (list all-stuck steps)])))

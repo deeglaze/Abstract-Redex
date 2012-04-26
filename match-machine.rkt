@@ -194,7 +194,7 @@
            [else (set (make-state:Iapply (make-term:cons tl t) b I))])]
     ;; TODO: break into several steps if we know the metafunction
     ;; is just another reduction relation (but a functional one)
-    [(meta-app f '() tdone I) 
+    [(meta-app f '() tdone I)
      (set (make-state:Iapply (apply f (reverse (cons t tdone))) b I))]
     [(meta-app f (cons r rs) tdone I)
      (set (make-state:Ieval r b (make-I:meta-app f rs (cons t tdone) I)))]))
